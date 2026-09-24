@@ -31,40 +31,70 @@
     }
 
     // ============ ПОЛУЧЕНИЕ НАЗВАНИЯ ФИЛЬМА ============
-    function getMovieTitle() {
-        var candidates = [
-            '.full__title',
-            '.full-start__title',
-            '.info__title',
-            '.online__title-movie',
-            '[class*="full__title"]',
-            '[class*="info__title"]',
-            'h1',
-            '.online__movie-title'
-        ];
+function getMovieTitle() {
+    var candidates = [
+        '.full__title',
+        '.full-start__title',
+        '.info__title',
+        '.online__title-movie',
+        '.online__movie-title',
+        '.movie-title',
+        '.card__title',
+        '[class*="full__title"]',
+        '[class*="info__title"]',
+        '[class*="movie__title"]',
+        '[class*="movie-title"]',
+        '[class*="card__title"]',
+        '.full-start__name',
+        '.full__name'
+    ];
 
-        for (var i = 0; i < candidates.length; i++) {
-            var el = document.querySelector(candidates[i]);
-            if (el) {
-                var txt = (el.textContent || '').trim();
-                if (txt) return txt;
+    for (var i = 0; i < candidates.length; i++) {
+        var el = document.querySelector(candidates[i]);
+        if (el) {
+            var txt = (el.textContent || '').trim();
+            if (txt && txt.length < 200) return txt;
+        }
+    }
+    return 'Lampa';
+}
+
+// Отладка: найти, где на странице лежит крупный заголовок
+window.iinaFindTitle = function () {
+    var candidates = [];
+    var all = document.querySelectorAll('*');
+    for (var i = 0; i < all.length; i++) {
+        var el = all[i];
+        // только элементы с прямым текстом (без вложенных тегов-контейнеров)
+        var directText = '';
+        for (var j = 0; j < el.childNodes.length; j++) {
+            if (el.childNodes[j].nodeType === 3) {
+                directText += el.childNodes[j].nodeValue;
             }
         }
+        directText = directText.trim();
+        if (!directText || directText.length < 3 || directText.length > 150) continue;
 
-        // Fallback: <title> страницы (Lampa обычно пишет "Название — Lampa")
-        var pageTitle = (document.title || '').split(/[—\-|]/)[0].trim();
-        return pageTitle || 'Lampa';
-    }
+        var st = window.getComputedStyle(el);
+        var fs = parseFloat(st.fontSize);
+        var fw = parseInt(st.fontWeight, 10) || 400;
 
-    // Для имени файла: убираем то, что ОС не любит в именах файлов
-    function sanitizeFilename(name) {
-        return name
-            .replace(/[\/\\:*?"<>|]/g, '_')
-            .replace(/\s+/g, ' ')
-            .replace(/^\.+/, '')
-            .trim()
-            .substring(0, 120);
+        // Интересуют крупные шрифты (заголовки)
+        if (fs >= 18 && fw >= 500) {
+            candidates.push({
+                tag: el.tagName,
+                class: (el.className || '').toString().substring(0, 60),
+                fontSize: fs,
+                weight: fw,
+                text: directText.substring(0, 70)
+            });
+        }
     }
+    // Сортируем по размеру шрифта — самые крупные сверху
+    candidates.sort(function(a, b) { return b.fontSize - a.fontSize; });
+    console.table(candidates);
+    return candidates;
+};
 
     // ================== КНОПКА ==================
     function createButton() {
