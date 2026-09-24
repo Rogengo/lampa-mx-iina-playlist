@@ -1,23 +1,24 @@
 /**
- * IINA Playlist Plugin для Lampa (v4)
+ * IINA Playlist Plugin для Lampa (v5)
  * - Собирает ссылки со всех серий в DOM
- * - Скачивает M3U-файл (без открытия IINA)
- * - Кнопка появляется только в ряду "Балансер / Фильтр"
+ * - Скачивает M3U-файл
+ * - Кнопка встраивается в ряд "Балансер / Фильтр"
+ * - Отладка: window.iinaDebug()
  */
 (function () {
     'use strict';
-    if (window.__iina_playlist_v4__) return;
-    window.__iina_playlist_v4__ = true;
+    if (window.__iina_playlist_v5__) return;
+    window.__iina_playlist_v5__ = true;
 
     var CONFIG = {
         EPISODE_DELAY:    1200,
         PLAYER_TIMEOUT:   15000,
         AFTER_START_WAIT: 800,
-        BUTTON_RETRY:     15,
-        BUTTON_DELAY:     400
+        POLL_INTERVAL:    500,
+        POLL_DURATION:    60000
     };
 
-    var state = { collecting: false, cancelled: false, progressEl: null };
+    var state = { collecting: false, cancelled: false, progressEl: null, pollTimer: null };
 
     function log() {
         var a = Array.prototype.slice.call(arguments);
@@ -31,7 +32,48 @@
         } catch (e) {}
     }
 
-    // ================== КНОПКА ==================
+    // ============ ПОИСК УЗЛА ПО СОБСТВЕННОМУ ТЕКСТУ ============
+    // Находит самый глубокий элемент, у которого ТЕКСТОВЫЙ УЗЕЛ напрямую содержит нужную строку
+    function findOwnTextElement(text) {
+        var result = null;
+        var all = document.getElementsByTagName('*');
+        for (var i = 0; i < all.length; i++) {
+            var el = all[i];
+            var own = '';
+            for (var j = 0; j < el.childNodes.length; j++) {
+                if (el.childNodes[j].nodeType === 3) {
+                    own += el.childNodes[j].nodeValue;
+                }
+            }
+            if (own.indexOf(text) >= 0) {
+                result = el; // берём последний найденный — обычно самый глубокий
+            }
+        }
+        return result ? $(result) : $();
+    }
+
+    // Ищет контейнер, в котором лежат оба текста: "Балансер" и "Фильтр"
+    function findFilterRow() {
+        var $b = findOwnTextElement('Балансер');
+        var $f = findOwnTextElement('Фильтр');
+
+        if (!$b.length && !$f.length) return $();
+        var $anchor = $f.length ? $f : $b;
+
+        var $node = $anchor;
+        for (var d = 0; d < 15; d++) {
+            var $p = $node.parent();
+            if (!$p.length || $p.is('body') || $p.is('html')) break;
+            var t = $p.text();
+            if (t.indexOf('Балансер') >= 0 && t.indexOf('Фильтр') >= 0) {
+                return $p;
+            }
+            $node = $p;
+        }
+        return $();
+    }
+
+    // ============ КНОПКА ============
     function createButton() {
         var $btn = $(
             '<div class="iina-btn selector" style="' +
@@ -59,48 +101,40 @@
         return $btn;
     }
 
-    function removeButton() {
-        $('.iina-btn').remove();
-    }
-
-    // Ищем ряд, в котором лежат selectbox'ы "Балансер" и "Фильтр"
-    function findFilterRow() {
-        var $balancer = $('[class*="selectbox"]').filter(function () {
-            return $(this).text().indexOf('Балансер') >= 0;
-        }).first();
-        if (!$balancer.length) return null;
-
-        var $row = $balancer.parent();
-        for (var d = 0; d < 6 && $row.length; d++) {
-            var hasFilter = $row.find('[class*="selectbox"]').filter(function () {
-                return $(this).text().indexOf('Фильтр') >= 0;
-            }).length > 0;
-            if (hasFilter) return $row;
-            $row = $row.parent();
-        }
-        return null;
-    }
+    function removeButton() { $('.iina-btn').remove(); }
 
     function tryAddButton() {
-        // Должны быть серии
-        if (!$('.online__body').length) return true; // нечего собирать — не показываем
         if ($('.iina-btn').length) return true;
+        if (!$('.online__body').length) return false; // ещё нет серий
 
         var $row = findFilterRow();
-        if (!$row || !$row.length) return false; // не нашли — попробуем позже
-
+        if (!$row.length) {
+            log('Ряд с "Балансер/Фильтр" не найден');
+            return false;
+        }
         $row.append(createButton());
         log('Кнопка добавлена в ряд фильтра');
         return true;
     }
 
-    function attemptAddButton(n) {
-        if (tryAddButton()) return;
-        if (n >= CONFIG.BUTTON_RETRY) return;
-        setTimeout(function(){ attemptAddButton(n + 1); }, CONFIG.BUTTON_DELAY);
+    function startPolling() {
+        stopPolling();
+        var started = Date.now();
+        state.pollTimer = setInterval(function () {
+            if ($('.iina-btn').length) return;
+            if (Date.now() - started > CONFIG.POLL_DURATION) {
+                stopPolling();
+                log('Поллинг остановлен (таймаут)');
+                return;
+            }
+            tryAddButton();
+        }, CONFIG.POLL_INTERVAL);
+    }
+    function stopPolling() {
+        if (state.pollTimer) { clearInterval(state.pollTimer); state.pollTimer = null; }
     }
 
-    // ================== ПРОГРЕСС ==================
+    // ============ ПРОГРЕСС ============
     function showProgress(cur, total) {
         if (!state.progressEl) {
             state.progressEl = $(
@@ -120,7 +154,7 @@
         if (state.progressEl) { state.progressEl.remove(); state.progressEl = null; }
     }
 
-    // ================== ХУК ПЛЕЕРА ==================
+    // ============ ХУК ПЛЕЕРА ============
     function attachPlayerHook(onStream) {
         var captured = false, origPlay = null, attached = false;
         try {
@@ -161,7 +195,7 @@
         } catch (e) {}
     }
 
-    // ================== СБОР ==================
+    // ============ СБОР ============
     function getEpisodes() {
         var list = [];
         $('.online__body').each(function () {
@@ -228,7 +262,7 @@
         }
     }
 
-    // ================== ФИНАЛ ==================
+    // ============ ФИНАЛ ============
     function finish(collected, reason) {
         state.collecting = false;
         state.cancelled = false;
@@ -268,35 +302,41 @@
         }
     }
 
-    // ================== ИНИЦИАЛИЗАЦИЯ ==================
+    // ============ ОТЛАДКА ============
+    window.iinaDebug = function () {
+        var $b = findOwnTextElement('Балансер');
+        var $f = findOwnTextElement('Фильтр');
+        var $row = findFilterRow();
+        var info = {
+            'online__body count': $('.online__body').length,
+            'iina-btn count': $('.iina-btn').length,
+            'leaf "Балансер"': $b.length ? $b.prop('tagName') + '.' + ($b.prop('class')||'') : 'НЕ НАЙДЕН',
+            'leaf "Фильтр"': $f.length ? $f.prop('tagName') + '.' + ($f.prop('class')||'') : 'НЕ НАЙДЕН',
+            'row найден': $row.length ? $row.prop('tagName') + '.' + ($row.prop('class')||'') : 'НЕ НАЙДЕН',
+            'row HTML (первые 300 символов)': $row.length ? $row.html().substring(0, 300) : '-'
+        };
+        console.table(info);
+        return info;
+    };
+
+    // ============ ИНИЦИАЛИЗАЦИЯ ============
     function onActivity(e) {
         var t = e.type;
         var comp = (e.component || (e.object && e.object.component) || '').toString();
 
         if (t === 'start') {
-            // При смене экрана всегда чистим старую кнопку
             removeButton();
+            if (comp.indexOf('online') === -1) {
+                stopPolling();
+            } else {
+                startPolling();
+            }
         }
-
-        if (t !== 'start' && t !== 'ready' && t !== 'complite') return;
-        if (comp.indexOf('online') === -1) return;
-        setTimeout(function(){ attemptAddButton(0); }, 400);
     }
 
     function init() {
-        log('Плагин v4 инициализирован');
+        log('Плагин v5 инициализирован. Отладка: window.iinaDebug()');
         Lampa.Listener.follow('activity', onActivity);
-
-        // Наблюдаем за появлением серий на текущем экране,
-        // но не добавляем кнопку, если её нельзя поставить в ряд фильтра
-        try {
-            var obs = new MutationObserver(function () {
-                if ($('.iina-btn').length) return;
-                if (!$('.online__body').length) return;
-                attemptAddButton(0);
-            });
-            obs.observe(document.body, { childList: true, subtree: true });
-        } catch (e) {}
 
         $(document).on('keydown.iina_playlist', function (e) {
             if (state.collecting && (e.keyCode === 8 || e.key === 'Backspace')) {
