@@ -1,21 +1,19 @@
 /**
- * IINA Playlist Plugin для Lampa (v5)
- * - Собирает ссылки со всех серий в DOM
- * - Скачивает M3U-файл
- * - Кнопка встраивается в ряд "Балансер / Фильтр"
- * - Отладка: window.iinaDebug()
+ * IINA Playlist Plugin для Lampa (v6)
+ * - Кнопка встроена в .torrent-filter (рядом с Балансер / Фильтр)
+ * - Внешний вид: <span>m3u</span><div>[icon]</div>
+ * - Скачивает M3U-файл со всеми сериями
  */
 (function () {
     'use strict';
-    if (window.__iina_playlist_v5__) return;
-    window.__iina_playlist_v5__ = true;
+    if (window.__iina_playlist_v6__) return;
+    window.__iina_playlist_v6__ = true;
 
     var CONFIG = {
         EPISODE_DELAY:    1200,
         PLAYER_TIMEOUT:   15000,
         AFTER_START_WAIT: 800,
-        POLL_INTERVAL:    500,
-        POLL_DURATION:    60000
+        POLL_INTERVAL:    400
     };
 
     var state = { collecting: false, cancelled: false, progressEl: null, pollTimer: null };
@@ -32,67 +30,21 @@
         } catch (e) {}
     }
 
-    // ============ ПОИСК УЗЛА ПО СОБСТВЕННОМУ ТЕКСТУ ============
-    // Находит самый глубокий элемент, у которого ТЕКСТОВЫЙ УЗЕЛ напрямую содержит нужную строку
-    function findOwnTextElement(text) {
-        var result = null;
-        var all = document.getElementsByTagName('*');
-        for (var i = 0; i < all.length; i++) {
-            var el = all[i];
-            var own = '';
-            for (var j = 0; j < el.childNodes.length; j++) {
-                if (el.childNodes[j].nodeType === 3) {
-                    own += el.childNodes[j].nodeValue;
-                }
-            }
-            if (own.indexOf(text) >= 0) {
-                result = el; // берём последний найденный — обычно самый глубокий
-            }
-        }
-        return result ? $(result) : $();
-    }
-
-    // Ищет контейнер, в котором лежат оба текста: "Балансер" и "Фильтр"
-    function findFilterRow() {
-        var $b = findOwnTextElement('Балансер');
-        var $f = findOwnTextElement('Фильтр');
-
-        if (!$b.length && !$f.length) return $();
-        var $anchor = $f.length ? $f : $b;
-
-        var $node = $anchor;
-        for (var d = 0; d < 15; d++) {
-            var $p = $node.parent();
-            if (!$p.length || $p.is('body') || $p.is('html')) break;
-            var t = $p.text();
-            if (t.indexOf('Балансер') >= 0 && t.indexOf('Фильтр') >= 0) {
-                return $p;
-            }
-            $node = $p;
-        }
-        return $();
-    }
-
     // ============ КНОПКА ============
     function createButton() {
         var $btn = $(
-            '<div class="iina-btn selector" style="' +
-                'display:inline-flex;align-items:center;gap:.45em;' +
-                'height:2.3em;padding:0 1em;margin:0 .3em;' +
-                'border-radius:.35em;cursor:pointer;' +
-                'background:rgba(255,255,255,.10);color:#fff;' +
-                'font-size:.95em;line-height:1;box-sizing:border-box;' +
-                'transition:background .15s;white-space:nowrap;' +
-                'user-select:none;vertical-align:middle;">' +
-                '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" ' +
-                    'style="flex-shrink:0;opacity:.9;">' +
-                    '<path d="M3 5h13v2H3V5zm0 5h13v2H3v-2zm0 5h9v2H3v-2zm14-1.5l5 3.5-5 3.5v-7z"/>' +
-                '</svg>' +
-                '<span>Плейлист IINA</span>' +
+            '<div class="simple-button simple-button--filter selector iina-btn" ' +
+                 'style="cursor:pointer;">' +
+                '<span>m3u</span>' +
+                '<div class="iina-icon">' +
+                    '<svg viewBox="0 0 24 24" width="15" height="15" ' +
+                         'fill="currentColor" style="display:block;">' +
+                        '<path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 ' +
+                              '10-4.48 10-10S17.52 2 12 2zm5 11h-4v4h-2v-4H7l5-5 5 5z"/>' +
+                    '</svg>' +
+                '</div>' +
             '</div>'
         );
-        $btn.on('mouseenter', function(){ $(this).css('background','rgba(255,255,255,.22)'); });
-        $btn.on('mouseleave', function(){ $(this).css('background','rgba(255,255,255,.10)'); });
         $btn.on('hover:enter click', function (e) {
             e.preventDefault(); e.stopPropagation();
             if (state.collecting) { notify('Уже выполняется'); return; }
@@ -103,32 +55,21 @@
 
     function removeButton() { $('.iina-btn').remove(); }
 
-    function tryAddButton() {
-        if ($('.iina-btn').length) return true;
-        if (!$('.online__body').length) return false; // ещё нет серий
-
-        var $row = findFilterRow();
-        if (!$row.length) {
-            log('Ряд с "Балансер/Фильтр" не найден');
-            return false;
-        }
-        $row.append(createButton());
-        log('Кнопка добавлена в ряд фильтра');
+    function addButton() {
+        var $container = $('.torrent-filter');
+        if (!$container.length) return false;
+        if ($container.find('.iina-btn').length) return true;
+        $container.append(createButton());
+        log('Кнопка добавлена в .torrent-filter');
         return true;
     }
 
+    // ============ ПОЛЛИНГ ============
     function startPolling() {
         stopPolling();
-        var started = Date.now();
-        state.pollTimer = setInterval(function () {
-            if ($('.iina-btn').length) return;
-            if (Date.now() - started > CONFIG.POLL_DURATION) {
-                stopPolling();
-                log('Поллинг остановлен (таймаут)');
-                return;
-            }
-            tryAddButton();
-        }, CONFIG.POLL_INTERVAL);
+        // Один раз сразу, чтобы кнопка появилась мгновенно
+        addButton();
+        state.pollTimer = setInterval(addButton, CONFIG.POLL_INTERVAL);
     }
     function stopPolling() {
         if (state.pollTimer) { clearInterval(state.pollTimer); state.pollTimer = null; }
@@ -302,23 +243,6 @@
         }
     }
 
-    // ============ ОТЛАДКА ============
-    window.iinaDebug = function () {
-        var $b = findOwnTextElement('Балансер');
-        var $f = findOwnTextElement('Фильтр');
-        var $row = findFilterRow();
-        var info = {
-            'online__body count': $('.online__body').length,
-            'iina-btn count': $('.iina-btn').length,
-            'leaf "Балансер"': $b.length ? $b.prop('tagName') + '.' + ($b.prop('class')||'') : 'НЕ НАЙДЕН',
-            'leaf "Фильтр"': $f.length ? $f.prop('tagName') + '.' + ($f.prop('class')||'') : 'НЕ НАЙДЕН',
-            'row найден': $row.length ? $row.prop('tagName') + '.' + ($row.prop('class')||'') : 'НЕ НАЙДЕН',
-            'row HTML (первые 300 символов)': $row.length ? $row.html().substring(0, 300) : '-'
-        };
-        console.table(info);
-        return info;
-    };
-
     // ============ ИНИЦИАЛИЗАЦИЯ ============
     function onActivity(e) {
         var t = e.type;
@@ -335,7 +259,7 @@
     }
 
     function init() {
-        log('Плагин v5 инициализирован. Отладка: window.iinaDebug()');
+        log('Плагин v6 инициализирован');
         Lampa.Listener.follow('activity', onActivity);
 
         $(document).on('keydown.iina_playlist', function (e) {
