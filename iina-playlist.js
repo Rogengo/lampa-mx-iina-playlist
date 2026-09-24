@@ -1,22 +1,20 @@
 /**
- * IINA Playlist Plugin для Lampa (v3)
+ * IINA Playlist Plugin для Lampa (v4)
  * - Собирает ссылки со всех серий в DOM
- * - Скачивает M3U-файл
- * - Пытается открыть IINA напрямую через iina://
+ * - Скачивает M3U-файл (без открытия IINA)
+ * - Кнопка появляется только в ряду "Балансер / Фильтр"
  */
 (function () {
     'use strict';
-    if (window.__iina_playlist_v3__) return;
-    window.__iina_playlist_v3__ = true;
+    if (window.__iina_playlist_v4__) return;
+    window.__iina_playlist_v4__ = true;
 
     var CONFIG = {
-        EPISODE_DELAY:   1200,
-        PLAYER_TIMEOUT:  15000,
+        EPISODE_DELAY:    1200,
+        PLAYER_TIMEOUT:   15000,
         AFTER_START_WAIT: 800,
-        BUTTON_RETRY:    30,
-        BUTTON_DELAY:    500,
-        TRY_OPEN_IINA:   true,   // пытаться открывать IINA напрямую
-        IINA_OPEN_DELAY: 600     // пауза между вызовами iina://
+        BUTTON_RETRY:     15,
+        BUTTON_DELAY:     400
     };
 
     var state = { collecting: false, cancelled: false, progressEl: null };
@@ -37,14 +35,14 @@
     function createButton() {
         var $btn = $(
             '<div class="iina-btn selector" style="' +
-                'display:inline-flex;align-items:center;gap:.5em;' +
-                'height:2.4em;padding:0 1.1em;margin-left:.6em;' +
+                'display:inline-flex;align-items:center;gap:.45em;' +
+                'height:2.3em;padding:0 1em;margin:0 .3em;' +
                 'border-radius:.35em;cursor:pointer;' +
                 'background:rgba(255,255,255,.10);color:#fff;' +
-                'font-size:1em;line-height:1;box-sizing:border-box;' +
+                'font-size:.95em;line-height:1;box-sizing:border-box;' +
                 'transition:background .15s;white-space:nowrap;' +
                 'user-select:none;vertical-align:middle;">' +
-                '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" ' +
+                '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" ' +
                     'style="flex-shrink:0;opacity:.9;">' +
                     '<path d="M3 5h13v2H3V5zm0 5h13v2H3v-2zm0 5h9v2H3v-2zm14-1.5l5 3.5-5 3.5v-7z"/>' +
                 '</svg>' +
@@ -61,45 +59,44 @@
         return $btn;
     }
 
+    function removeButton() {
+        $('.iina-btn').remove();
+    }
+
+    // Ищем ряд, в котором лежат selectbox'ы "Балансер" и "Фильтр"
+    function findFilterRow() {
+        var $balancer = $('[class*="selectbox"]').filter(function () {
+            return $(this).text().indexOf('Балансер') >= 0;
+        }).first();
+        if (!$balancer.length) return null;
+
+        var $row = $balancer.parent();
+        for (var d = 0; d < 6 && $row.length; d++) {
+            var hasFilter = $row.find('[class*="selectbox"]').filter(function () {
+                return $(this).text().indexOf('Фильтр') >= 0;
+            }).length > 0;
+            if (hasFilter) return $row;
+            $row = $row.parent();
+        }
+        return null;
+    }
+
     function tryAddButton() {
+        // Должны быть серии
+        if (!$('.online__body').length) return true; // нечего собирать — не показываем
         if ($('.iina-btn').length) return true;
 
-        var $btn = createButton();
+        var $row = findFilterRow();
+        if (!$row || !$row.length) return false; // не нашли — попробуем позже
 
-        // Ищем ряд с "Балансер" и "Фильтр" — вставляем кнопку туда же
-        var $selectboxes = $('[class*="selectbox"]').filter(function () {
-            var t = $(this).text();
-            return t.indexOf('Балансер') >= 0 || t.indexOf('Фильтр') >= 0;
-        });
-
-        if ($selectboxes.length) {
-            // Поднимаемся до общего родителя, в котором обе кнопки
-            var $row = $selectboxes.first().parent();
-            for (var depth = 0; depth < 5 && $row.length && !$row.is('body'); depth++) {
-                if ($row.find('[class*="selectbox"]').length >= 2) break;
-                $row = $row.parent();
-            }
-            if ($row.length && !$row.is('body')) {
-                $row.append($btn);
-                log('Кнопка добавлена в ряд с selectbox');
-                return true;
-            }
-        }
-
-        // Fallback: fixed в правом верхнем углу
-        $btn.css({
-            position: 'fixed', top: '4.8em', right: '1em', zIndex: 9999,
-            background: 'rgba(0,0,0,.75)',
-            border: '1px solid rgba(255,255,255,.2)'
-        });
-        $('body').append($btn);
-        log('Кнопка добавлена как floating');
+        $row.append(createButton());
+        log('Кнопка добавлена в ряд фильтра');
         return true;
     }
 
     function attemptAddButton(n) {
         if (tryAddButton()) return;
-        if (n >= CONFIG.BUTTON_RETRY) { log('Кнопка не добавлена'); return; }
+        if (n >= CONFIG.BUTTON_RETRY) return;
         setTimeout(function(){ attemptAddButton(n + 1); }, CONFIG.BUTTON_DELAY);
     }
 
@@ -243,16 +240,10 @@
             m3u += '#EXTINF:-1,' + item.title + '\n' + item.url + '\n';
         });
 
-        var downloaded = downloadM3U(m3u, collected.length);
-
+        var ok = downloadM3U(m3u, collected.length);
         var msg = (reason ? reason + ': ' : 'Готово: ') + collected.length + ' серий';
-        if (downloaded) msg += ' · M3U скачан';
+        if (ok) msg += ' · M3U скачан';
         notify(msg);
-
-        if (CONFIG.TRY_OPEN_IINA) {
-            // Небольшая задержка, чтобы нотификация успела появиться
-            setTimeout(function(){ openInIINA(collected); }, 400);
-        }
     }
 
     function downloadM3U(m3uText, count) {
@@ -277,53 +268,36 @@
         }
     }
 
-    function openInIINA(episodes) {
-        // Используем iina://weblink?url=...
-        // IINA добавляет последующие ссылки в текущий плейлист, если уже запущен
-        var urls = episodes.map(function(e){ return e.url; });
-        var i = 0;
-        function next() {
-            if (i >= urls.length || state.cancelled) {
-                log('Открытие IINA завершено');
-                return;
-            }
-            var url = urls[i]; i++;
-            try {
-                var a = document.createElement('a');
-                a.href = 'iina://weblink?url=' + encodeURIComponent(url);
-                a.style.display = 'none';
-                document.body.appendChild(a);
-                a.click();
-                setTimeout(function() {
-                    if (a.parentNode) a.parentNode.removeChild(a);
-                }, 500);
-                log('→ IINA:', i + '/' + urls.length);
-            } catch (e) { log('IINA err:', e); }
-            setTimeout(next, CONFIG.IINA_OPEN_DELAY);
-        }
-        next();
-    }
-
     // ================== ИНИЦИАЛИЗАЦИЯ ==================
     function onActivity(e) {
         var t = e.type;
         var comp = (e.component || (e.object && e.object.component) || '').toString();
+
+        if (t === 'start') {
+            // При смене экрана всегда чистим старую кнопку
+            removeButton();
+        }
+
         if (t !== 'start' && t !== 'ready' && t !== 'complite') return;
         if (comp.indexOf('online') === -1) return;
         setTimeout(function(){ attemptAddButton(0); }, 400);
     }
 
     function init() {
-        log('Плагин v3 инициализирован');
+        log('Плагин v4 инициализирован');
         Lampa.Listener.follow('activity', onActivity);
+
+        // Наблюдаем за появлением серий на текущем экране,
+        // но не добавляем кнопку, если её нельзя поставить в ряд фильтра
         try {
             var obs = new MutationObserver(function () {
-                if ($('.online__body').length && !$('.iina-btn').length) {
-                    attemptAddButton(0);
-                }
+                if ($('.iina-btn').length) return;
+                if (!$('.online__body').length) return;
+                attemptAddButton(0);
             });
             obs.observe(document.body, { childList: true, subtree: true });
         } catch (e) {}
+
         $(document).on('keydown.iina_playlist', function (e) {
             if (state.collecting && (e.keyCode === 8 || e.key === 'Backspace')) {
                 state.cancelled = true;
