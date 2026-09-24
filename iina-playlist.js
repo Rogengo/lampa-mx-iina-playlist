@@ -37,7 +37,6 @@
         var html =
             '<div class="simple-button simple-button--filter selector iina-btn">' +
                 '<span>m3u Download</span>' +
-                '</div>' +
             '</div>';
 
         var $btn = $(html);
