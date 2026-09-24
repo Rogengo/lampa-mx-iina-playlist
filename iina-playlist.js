@@ -1,13 +1,13 @@
 /**
- * IINA Playlist Plugin для Lampa (v6)
- * - Кнопка встроена в .torrent-filter (рядом с Балансер / Фильтр)
- * - Внешний вид: <span>m3u</span><div>[icon]</div>
- * - Скачивает M3U-файл со всеми сериями
+ * IINA Playlist Plugin для Lampa (v7)
+ * - Кнопка [m3u ⬇] встроена в .torrent-filter как обычная simple-button--filter
+ * - Никаких кастомных инлайн-стилей на самой кнопке
+ * - Скачивает M3U со всеми сериями
  */
 (function () {
     'use strict';
-    if (window.__iina_playlist_v6__) return;
-    window.__iina_playlist_v6__ = true;
+    if (window.__iina_playlist_v7__) return;
+    window.__iina_playlist_v7__ = true;
 
     var CONFIG = {
         EPISODE_DELAY:    1200,
@@ -30,26 +30,42 @@
         } catch (e) {}
     }
 
-    // ============ КНОПКА ============
+    // ================== КНОПКА ==================
     function createButton() {
-        var $btn = $(
-            '<div class="simple-button simple-button--filter selector iina-btn" ' +
-                 'style="cursor:pointer;">' +
+        // HTML полностью в стиле соседних кнопок. Класса filter--filter НЕТ —
+        // чтобы не подцепить JS-поведение фильтра.
+        var html =
+            '<div class="simple-button simple-button--filter selector iina-btn">' +
                 '<span>m3u</span>' +
                 '<div class="iina-icon">' +
-                    '<svg viewBox="0 0 24 24" width="15" height="15" ' +
-                         'fill="currentColor" style="display:block;">' +
-                        '<path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 ' +
-                              '10-4.48 10-10S17.52 2 12 2zm5 11h-4v4h-2v-4H7l5-5 5 5z"/>' +
+                    '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">' +
+                        '<path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 ' +
+                              '10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm2.07-7.75l-.9.92C13.45 ' +
+                              '10.9 13 11.5 13 13h-2v-.5c0-1.1.45-2.1 1.17-2.83l1.24-1.26' +
+                              'c.37-.36.59-.86.59-1.41 0-1.1-.9-2-2-2s-2 .9-2 2H8c0-2.21 ' +
+                              '1.79-4 4-4s4 1.79 4 4c0 .88-.36 1.68-.93 2.25z"/>' +
                     '</svg>' +
                 '</div>' +
-            '</div>'
-        );
+            '</div>';
+
+        var $btn = $(html);
+
+        // Иконка чуть меньше текста и выровнена по центру
+        $btn.find('.iina-icon').css({
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            marginLeft: '.4em',
+            opacity: '.85'
+        });
+
         $btn.on('hover:enter click', function (e) {
-            e.preventDefault(); e.stopPropagation();
+            e.preventDefault();
+            e.stopPropagation();
             if (state.collecting) { notify('Уже выполняется'); return; }
             startCollection();
         });
+
         return $btn;
     }
 
@@ -64,10 +80,9 @@
         return true;
     }
 
-    // ============ ПОЛЛИНГ ============
+    // ================== ПОЛЛИНГ ==================
     function startPolling() {
         stopPolling();
-        // Один раз сразу, чтобы кнопка появилась мгновенно
         addButton();
         state.pollTimer = setInterval(addButton, CONFIG.POLL_INTERVAL);
     }
@@ -75,7 +90,7 @@
         if (state.pollTimer) { clearInterval(state.pollTimer); state.pollTimer = null; }
     }
 
-    // ============ ПРОГРЕСС ============
+    // ================== ПРОГРЕСС ==================
     function showProgress(cur, total) {
         if (!state.progressEl) {
             state.progressEl = $(
@@ -95,7 +110,7 @@
         if (state.progressEl) { state.progressEl.remove(); state.progressEl = null; }
     }
 
-    // ============ ХУК ПЛЕЕРА ============
+    // ================== ХУК ПЛЕЕРА ==================
     function attachPlayerHook(onStream) {
         var captured = false, origPlay = null, attached = false;
         try {
@@ -136,7 +151,7 @@
         } catch (e) {}
     }
 
-    // ============ СБОР ============
+    // ================== СБОР ==================
     function getEpisodes() {
         var list = [];
         $('.online__body').each(function () {
@@ -203,7 +218,7 @@
         }
     }
 
-    // ============ ФИНАЛ ============
+    // ================== ФИНАЛ ==================
     function finish(collected, reason) {
         state.collecting = false;
         state.cancelled = false;
@@ -243,23 +258,34 @@
         }
     }
 
-    // ============ ИНИЦИАЛИЗАЦИЯ ============
+    // ================== ОТЛАДКА ==================
+    window.iinaDebug = function () {
+        var $c = $('.torrent-filter');
+        var info = {
+            'torrent-filter найден': $c.length,
+            'iina-btn в нём': $c.find('.iina-btn').length,
+            'фильтров рядом': $c.find('.simple-button--filter').length,
+            'серий online__body': $('.online__body').length
+        };
+        console.table(info);
+        if ($c.length) console.log('torrent-filter HTML:', $c.html());
+        return info;
+    };
+
+    // ================== ИНИЦИАЛИЗАЦИЯ ==================
     function onActivity(e) {
         var t = e.type;
         var comp = (e.component || (e.object && e.object.component) || '').toString();
 
         if (t === 'start') {
             removeButton();
-            if (comp.indexOf('online') === -1) {
-                stopPolling();
-            } else {
-                startPolling();
-            }
+            if (comp.indexOf('online') === -1) stopPolling();
+            else startPolling();
         }
     }
 
     function init() {
-        log('Плагин v6 инициализирован');
+        log('Плагин v7 инициализирован');
         Lampa.Listener.follow('activity', onActivity);
 
         $(document).on('keydown.iina_playlist', function (e) {
