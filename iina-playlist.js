@@ -1,13 +1,13 @@
 /**
- * IINA Playlist Plugin для Lampa (v7)
- * - Кнопка [m3u ⬇] встроена в .torrent-filter как обычная simple-button--filter
- * - Никаких кастомных инлайн-стилей на самой кнопке
- * - Скачивает M3U со всеми сериями
+ * IINA Playlist Plugin для Lampa (v9)
+ * - Кнопка [m3u Download] в ряду .torrent-filter
+ * - Собирает ссылки со всех серий
+ * - В M3U и в имени файла пишется название фильма/сериала
  */
 (function () {
     'use strict';
-    if (window.__iina_playlist_v7__) return;
-    window.__iina_playlist_v7__ = true;
+    if (window.__iina_playlist_v9__) return;
+    window.__iina_playlist_v9__ = true;
 
     var CONFIG = {
         EPISODE_DELAY:    1200,
@@ -30,10 +30,44 @@
         } catch (e) {}
     }
 
+    // ============ ПОЛУЧЕНИЕ НАЗВАНИЯ ФИЛЬМА ============
+    function getMovieTitle() {
+        var candidates = [
+            '.full__title',
+            '.full-start__title',
+            '.info__title',
+            '.online__title-movie',
+            '[class*="full__title"]',
+            '[class*="info__title"]',
+            'h1',
+            '.online__movie-title'
+        ];
+
+        for (var i = 0; i < candidates.length; i++) {
+            var el = document.querySelector(candidates[i]);
+            if (el) {
+                var txt = (el.textContent || '').trim();
+                if (txt) return txt;
+            }
+        }
+
+        // Fallback: <title> страницы (Lampa обычно пишет "Название — Lampa")
+        var pageTitle = (document.title || '').split(/[—\-|]/)[0].trim();
+        return pageTitle || 'Lampa';
+    }
+
+    // Для имени файла: убираем то, что ОС не любит в именах файлов
+    function sanitizeFilename(name) {
+        return name
+            .replace(/[\/\\:*?"<>|]/g, '_')
+            .replace(/\s+/g, ' ')
+            .replace(/^\.+/, '')
+            .trim()
+            .substring(0, 120);
+    }
+
     // ================== КНОПКА ==================
     function createButton() {
-        // HTML полностью в стиле соседних кнопок. Класса filter--filter НЕТ —
-        // чтобы не подцепить JS-поведение фильтра.
         var html =
             '<div class="simple-button simple-button--filter selector iina-btn">' +
                 '<span>m3u Download</span>' +
@@ -150,16 +184,20 @@
     function startCollection() {
         var eps = getEpisodes();
         if (!eps.length) { notify('Серии не найдены'); return; }
+
+        var movieTitle = getMovieTitle();
+        log('Фильм:', movieTitle);
+        log('Сбор:', eps.length, 'серий');
+
         state.collecting = true;
         state.cancelled = false;
-        log('Сбор:', eps.length, 'серий');
         showProgress(0, eps.length);
-        processNext(eps, 0, []);
+        processNext(eps, 0, [], movieTitle);
     }
 
-    function processNext(eps, i, collected) {
-        if (state.cancelled) { finish(collected, 'Отменено'); return; }
-        if (i >= eps.length) { finish(collected, null); return; }
+    function processNext(eps, i, collected, movieTitle) {
+        if (state.cancelled) { finish(collected, 'Отменено', movieTitle); return; }
+        if (i >= eps.length) { finish(collected, null, movieTitle); return; }
 
         var ep = eps[i];
         showProgress(i + 1, eps.length);
@@ -171,7 +209,8 @@
             done = true;
             if (detach) detach();
             closePlayer();
-            setTimeout(function(){ processNext(eps, i + 1, collected); }, CONFIG.EPISODE_DELAY);
+            setTimeout(function(){ processNext(eps, i + 1, collected, movieTitle); },
+                       CONFIG.EPISODE_DELAY);
         }
 
         var tId = setTimeout(function () {
@@ -201,27 +240,33 @@
     }
 
     // ================== ФИНАЛ ==================
-    function finish(collected, reason) {
+    function finish(collected, reason, movieTitle) {
         state.collecting = false;
         state.cancelled = false;
         hideProgress();
         if (!collected.length) { notify('Ссылки не собраны'); return; }
 
+        // Формируем M3U с названием фильма в каждой записи
         var m3u = '#EXTM3U\n';
         collected.forEach(function (item) {
-            m3u += '#EXTINF:-1,' + item.title + '\n' + item.url + '\n';
+            m3u += '#EXTINF:-1,' + movieTitle + ' — ' + item.title + '\n' +
+                   item.url + '\n';
         });
 
-        var ok = downloadM3U(m3u, collected.length);
-        var msg = (reason ? reason + ': ' : 'Готово: ') + collected.length + ' серий';
+        var ok = downloadM3U(m3u, collected.length, movieTitle);
+        var msg = (reason ? reason + ': ' : 'Готово: ') +
+                  collected.length + ' серий';
         if (ok) msg += ' · M3U скачан';
         notify(msg);
     }
 
-    function downloadM3U(m3uText, count) {
+    function downloadM3U(m3uText, count, movieTitle) {
         try {
-            var filename = 'lampa-iina-' + count + 'ep-' + Date.now() + '.m3u';
-            var blob = new Blob(['\ufeff' + m3uText], { type: 'application/x-mpegurl;charset=utf-8' });
+            var safeTitle = sanitizeFilename(movieTitle);
+            var filename = safeTitle + ' — ' + count + ' ep.m3u';
+
+            var blob = new Blob(['\ufeff' + m3uText],
+                                { type: 'application/x-mpegurl;charset=utf-8' });
             var url = URL.createObjectURL(blob);
             var a = document.createElement('a');
             a.href = url;
@@ -233,6 +278,7 @@
                 if (a.parentNode) a.parentNode.removeChild(a);
                 URL.revokeObjectURL(url);
             }, 1500);
+            log('Файл:', filename);
             return true;
         } catch (e) {
             log('Download failed:', e);
@@ -242,15 +288,13 @@
 
     // ================== ОТЛАДКА ==================
     window.iinaDebug = function () {
-        var $c = $('.torrent-filter');
         var info = {
-            'torrent-filter найден': $c.length,
-            'iina-btn в нём': $c.find('.iina-btn').length,
-            'фильтров рядом': $c.find('.simple-button--filter').length,
-            'серий online__body': $('.online__body').length
+            'torrent-filter найден': $('.torrent-filter').length,
+            'iina-btn в нём': $('.torrent-filter').find('.iina-btn').length,
+            'online__body (серий)': $('.online__body').length,
+            'Название фильма': getMovieTitle()
         };
         console.table(info);
-        if ($c.length) console.log('torrent-filter HTML:', $c.html());
         return info;
     };
 
@@ -267,7 +311,7 @@
     }
 
     function init() {
-        log('Плагин v7 инициализирован');
+        log('Плагин v9 инициализирован');
         Lampa.Listener.follow('activity', onActivity);
 
         $(document).on('keydown.iina_playlist', function (e) {
